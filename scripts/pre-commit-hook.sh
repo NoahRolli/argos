@@ -42,7 +42,7 @@ scan_block 'AKIA[0-9A-Z]{16}' "AWS access key"
 scan_block 'ghp_[A-Za-z0-9]{36}' "GitHub PAT"
 scan_block 'github_pat_[A-Za-z0-9_]{82}' "GitHub fine-grained PAT"
 scan_block 'eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "JWT token"
-scan_block 'BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY' "private key block"
+scan_block 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' "private key block"
 scan_block '(api[_-]?key|secret[_-]?key)[[:space:]]*[:=][[:space:]]*["'"'"'][A-Za-z0-9_-]{20,}' "generic API/secret key" "-i"
 
 scan_warn() {
