@@ -1,0 +1,94 @@
+# =============================================================================
+# .gitignore — vision-learn
+# Principle (per SECURITY_SETUP.md): ignore broadly, allow narrowly.
+# Created BEFORE the first commit. Do not retrofit.
+# =============================================================================
+
+# --- Secrets (Layer 1) ------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+secrets/
+.keys/
+
+# --- Databases --------------------------------------------------------------
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# --- Local storage / backups ------------------------------------------------
+local_storage/
+backups/
+*.bak
+*.backup
+*.dump
+
+# =============================================================================
+# CAMERA / CV ADDITIONS — the sensitive data class this project introduces.
+# These can contain biometric / personal image data. Treat like secrets.
+# =============================================================================
+
+# --- Captured frames & recordings (NEVER commit) ----------------------------
+data/captures/
+data/datasets/
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.gif
+*.webp
+*.mp4
+*.mov
+*.avi
+*.mkv
+# Allow a tiny, explicitly-vetted set of UI/test assets only:
+!assets/**
+!tests/fixtures/**
+
+# --- Learned embeddings (can reconstruct faces/scenes — as sensitive as .env)
+data/embeddings/
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.faiss
+*.index
+
+# --- Model weights (large; downloaded artifacts, not source) ----------------
+models/
+*.pt
+*.pth
+*.onnx
+*.task
+*.tflite
+*.mlpackage
+*.mlmodel
+*.engine
+
+# --- Build / cache ----------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- IDE / OS noise ---------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Logs -------------------------------------------------------------------
+*.log
+logs/

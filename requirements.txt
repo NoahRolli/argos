@@ -1,0 +1,35 @@
+# =============================================================================
+# requirements.txt — vision-learn (core stack, Apple Silicon M3)
+#
+# These are VERSION FLOORS for readability. For "maximum security" generate a
+# fully pinned + hashed lockfile LOCALLY after install, e.g.:
+#
+#     pip install uv
+#     uv pip compile requirements.txt -o requirements.lock --generate-hashes
+#     uv pip sync requirements.lock
+#
+# A hashed lock is your supply-chain defense: it prevents a tampered or
+# swapped dependency version from being installed silently.
+# =============================================================================
+
+# Core CV / camera
+opencv-python>=4.10            # camera capture + drawing
+numpy>=1.26                    # arrays / embeddings math
+
+# Object detection (YOLO26 — released Jan 2026; verify this version pulls it)
+ultralytics>=8.4               # provides YOLO26; runs on MPS via torch
+torch>=2.3                     # Apple Silicon MPS backend
+torchvision>=0.18              # backbone for few-shot embeddings (learner.py)
+
+# Hand gestures
+mediapipe>=0.10.18             # Gesture Recognizer + 21 hand landmarks
+
+# Config
+python-dotenv>=1.0             # load .env
+
+# Dev / quality (optional but recommended)
+ruff>=0.6                      # lint + format
+pytest>=8.0                    # tests/
+
+# NOTE on Python version: target Python 3.12. If mediapipe wheels are not yet
+# available for your interpreter, fall back to 3.11 (pyenv makes this easy).
