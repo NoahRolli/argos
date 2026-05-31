@@ -54,6 +54,3 @@ RECOGNITION_THRESHOLD = float(_env("RECOGNITION_THRESHOLD", "0.75"))
 DISABLE_ULTRALYTICS_TELEMETRY = _bool("DISABLE_ULTRALYTICS_TELEMETRY", "true")
 PERSIST_FRAMES = _bool("PERSIST_FRAMES", "false")
 
-if DISABLE_ULTRALYTICS_TELEMETRY:
-    # Belt-and-suspenders: set before ultralytics is imported anywhere.
-    os.environ["YOLO_OFFLINE"] = "true"
