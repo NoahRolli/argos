@@ -4,8 +4,6 @@ Local, privacy-first computer vision for macOS (Apple Silicon). ARGOS sees what
 your camera sees, recognizes objects in real time, learns new ones from your
 feedback, and reads hand gestures as commands — **fully on-device, no cloud**.
 
-> Named after Argos Panoptes, the all-seeing guardian of Greek myth.
-
 ## Why fully local
 
 Camera frames are personal, sometimes biometric, data. Keeping every step on the
