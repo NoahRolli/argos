@@ -11,8 +11,9 @@ Controls in the window:
     u     undo the last few-shot example
     q/ESC quit
 
-Training crops go to data/datasets/<class>/ (gitignored). Persons are
-identified by face recognition (python -m src.faces enroll), not object teaching.
+Few-shot labels live in data/embeddings/; confirmed/corrected training crops go
+to data/datasets/<class>/ (all gitignored). Persons are identified by face
+recognition (python -m src.faces enroll), not object teaching.
 """
 from __future__ import annotations
 
@@ -46,13 +47,18 @@ def _save_example(crop, label: str) -> Path:
     return path
 
 
+def _count_collected() -> int:
+    return sum(1 for _ in _DATASETS_DIR.rglob("*.jpg")) if _DATASETS_DIR.exists() else 0
+
+
 def run() -> None:
     det = Detector()
     face_id = FaceID()
     obj_embedder = Embedder()
     obj_store = EmbeddingStore()
+    collected = _count_collected()
     print(f"[ARGOS] bereit — {len(obj_store.labels)} Few-Shot-Beispiele, "
-          f"{len(set(face_id.names))} bekannte Gesichter.")
+          f"{len(set(face_id.names))} bekannte Gesichter, {collected} gesammelte Bilder.")
     print("[ARGOS] Im Fenster: 0-9 Objekt wählen, dann Enter=korrekt / !klasse / Label / q im Terminal. "
           "u = undo, q/ESC = beenden.")
 
@@ -106,7 +112,8 @@ def run() -> None:
                 now = time.time(); dt = now - prev; prev = now
                 if dt > 0:
                     fps = 0.9 * fps + 0.1 * (1.0 / dt)
-                cv2.putText(frame, f"ARGOS  {fps:4.1f} FPS  taught={len(obj_store.labels)}",
+                cv2.putText(frame,
+                            f"ARGOS  {fps:4.1f} FPS  taught={len(obj_store.labels)}  collected={collected}",
                             (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
                 cv2.imshow(window, frame)
 
@@ -131,14 +138,16 @@ def run() -> None:
                     ).strip()
                     if ans == "":
                         p = _save_example(crop, name)
-                        print(f"[ARGOS] bestätigt: {name} -> {p.parent.name}/")
+                        collected += 1
+                        print(f"[ARGOS] bestätigt: {name} -> {p.parent.name}/ ({collected} gesamt)")
                     elif ans.lower() in ("q", "c"):
                         print("[ARGOS] abgebrochen")
                     elif ans.startswith("!"):
                         corrected = ans[1:].strip()
                         if corrected:
                             p = _save_example(crop, corrected)
-                            print(f"[ARGOS] korrigiert: {name} -> {p.parent.name}/")
+                            collected += 1
+                            print(f"[ARGOS] korrigiert: {name} -> {p.parent.name}/ ({collected} gesamt)")
                         else:
                             print("[ARGOS] keine Klasse angegeben")
                     else:
