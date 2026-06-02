@@ -1,4 +1,4 @@
-"""ARGOS application logic — the unified live view, encapsulated."""
+"""ARGOS application logic — unified live view with manual box drawing."""
 from __future__ import annotations
 
 import datetime
@@ -42,6 +42,12 @@ class ArgosApp:
         self._snap_clean = None
         self._snap_boxes: list = []
         self._snap_disp = None
+        # manual drawing state
+        self.draw_mode = False
+        self._drawing = False
+        self._draw_start = None
+        self._draw_end = None
+        self._draw_box = None  # finalized box, pending label
 
     def _save_example(self, crop, label: str) -> Path:
         d = _DATASETS_DIR / _slug(label)
@@ -51,9 +57,28 @@ class ArgosApp:
         cv2.imwrite(str(path), crop)
         return path
 
+    # --- mouse callback for manual box drawing ---
+    def _on_mouse(self, event, x, y, flags, param) -> None:
+        if not self.draw_mode:
+            return
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self._drawing = True
+            self._draw_start = (x, y)
+            self._draw_end = (x, y)
+        elif event == cv2.EVENT_MOUSEMOVE and self._drawing:
+            self._draw_end = (x, y)
+        elif event == cv2.EVENT_LBUTTONUP and self._drawing:
+            self._drawing = False
+            self._draw_end = (x, y)
+            (x1, y1), (x2, y2) = self._draw_start, self._draw_end
+            box = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+            if (box[2] - box[0]) >= 10 and (box[3] - box[1]) >= 10:
+                self._draw_box = box
+            self._draw_start = self._draw_end = None
+
     def _process(self, frame) -> None:
-        clean = frame.copy()      # sauberes Bild zum Ausschneiden
-        disp = frame              # auf dieses wird gezeichnet
+        clean = frame.copy()
+        disp = frame
         boxes = []
         result = self.det.detect(clean)
         if result.boxes is not None and len(result.boxes) > 0:
@@ -102,7 +127,12 @@ class ArgosApp:
                     f"ARGOS {self.fps:4.1f}FPS  taught={len(self.store.labels)} "
                     f"collected={self.collected} conf={self.det.conf:.2f}",
                     (10, 28), _FONT, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
-        if self.frozen:
+        if self.draw_mode:
+            if self._draw_start and self._draw_end:
+                cv2.rectangle(shown, self._draw_start, self._draw_end, (255, 255, 255), 2)
+            cv2.putText(shown, "ZEICHNEN: Rechteck ziehen, Label im Terminal, 'd'=fertig",
+                        (10, shown.shape[0] - 15), _FONT, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+        elif self.frozen:
             cv2.putText(shown, "EINGEFROREN - Ziffer waehlen, Leertaste = weiter",
                         (10, shown.shape[0] - 15), _FONT, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
         return shown
@@ -135,11 +165,34 @@ class ArgosApp:
             self.store.add(ans, name, self.embedder.embed(crop))
             print(f"[ARGOS] gelernt: {name} | {ans!r} ({len(self.store.labels)} gesamt)")
 
+    def _label_drawn_box(self) -> None:
+        x1, y1, x2, y2 = self._draw_box
+        self._draw_box = None
+        crop = self._snap_clean[max(0, y1):y2, max(0, x1):x2]
+        if not crop.size:
+            return
+        label = input("[ARGOS] Label für gezeichnete Box (leer = abbrechen)\n> ").strip()
+        if not label:
+            print("[ARGOS] abgebrochen")
+            return
+        p = self._save_example(crop, label); self.collected += 1
+        print(f"[ARGOS] gezeichnet & gespeichert: {label} -> {p.parent.name}/ ({self.collected} gesamt)")
+
     def _handle_key(self, key: int) -> bool:
         """Return False to quit."""
         if key in (ord("q"), 27):
             return False
-        if key == 32:  # Leertaste
+        if key == ord("d"):
+            self.draw_mode = not self.draw_mode
+            self.frozen = self.draw_mode
+            self._drawing = False
+            self._draw_start = self._draw_end = self._draw_box = None
+            print("[ARGOS] Zeichenmodus AN — Rechteck ziehen, dann Label im Terminal."
+                  if self.draw_mode else "[ARGOS] Zeichenmodus AUS")
+            return True
+        if self.draw_mode:
+            return True  # im Zeichenmodus: nur Maus + d/q
+        if key == 32:
             self.frozen = not self.frozen
         elif key == ord("u"):
             removed = self.store.undo()
@@ -162,9 +215,11 @@ class ArgosApp:
     def run(self) -> None:
         print(f"[ARGOS] bereit — {len(self.store.labels)} Few-Shot-Beispiele, "
               f"{len(set(self.faces.names))} Gesichter, {self.collected} gesammelte Bilder.")
-        print("[ARGOS] Leertaste=einfrieren, dann 0-9 wählen. -/+ = Empfindlichkeit, "
-              "u=undo, q/ESC=beenden.")
+        print("[ARGOS] Leertaste=einfrieren, 0-9=Objekt, d=Box zeichnen, "
+              "-/+ = Empfindlichkeit, u=undo, q/ESC=beenden.")
         window = "ARGOS"
+        cv2.namedWindow(window)
+        cv2.setMouseCallback(window, self._on_mouse)
         try:
             with Camera() as cam:
                 for frame in cam.frames():
@@ -174,6 +229,8 @@ class ArgosApp:
                     cv2.imshow(window, self._overlay())
                     if not self._handle_key(cv2.waitKey(1) & 0xFF):
                         break
+                    if self._draw_box is not None:
+                        self._label_drawn_box()
         except CameraError as exc:
             print(f"[ARGOS] {exc}", file=sys.stderr)
             sys.exit(1)
