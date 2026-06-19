@@ -1,13 +1,13 @@
-"""ARGOS application logic — unified live view with manual box drawing."""
+"""ARGOS application logic — unified view with manual + auto (harvest) learning."""
 from __future__ import annotations
 
 import datetime
 import re
 import sys
 import time
-from pathlib import Path
 
 import cv2
+import numpy as np
 
 from . import config
 from .camera import Camera, CameraError
@@ -17,6 +17,13 @@ from .learner import Embedder, EmbeddingStore
 
 _DATASETS_DIR = config.DATA_DIR / "datasets"
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
+_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+# --- auto-harvest tuning ---
+_HARVEST_CONF = 0.85      # nur sehr sichere YOLO-Erkennungen ernten
+_DEDUP_SIM = 0.90         # >= so ähnlich zu Vorhandenem -> überspringen (Vielfalt)
+_HARVEST_CAP = 80         # max. Beispiele pro Klasse, die Harvest selbst anlegt
+_HARVEST_INTERVAL = 0.5   # Sekunden zwischen Harvest-Versuchen
 
 
 def _slug(s: str) -> str:
@@ -28,8 +35,6 @@ def _count_collected() -> int:
 
 
 class ArgosApp:
-    """Holds the models/state and runs the unified live view."""
-
     def __init__(self) -> None:
         self.det = Detector()
         self.faces = FaceID()
@@ -42,22 +47,47 @@ class ArgosApp:
         self._snap_clean = None
         self._snap_boxes: list = []
         self._snap_disp = None
-        # manual drawing state
+        # manual drawing
         self.draw_mode = False
         self._drawing = False
         self._draw_start = None
         self._draw_end = None
-        self._draw_box = None  # finalized box, pending label
+        self._draw_box = None
+        # auto-harvest
+        self.harvest = False
+        self._harvested = 0
+        self._last_harvest = 0.0
+        self._harvest_emb: dict[str, list] = {}
+        self._class_counts: dict[str, int] = {}
+        if _DATASETS_DIR.exists():
+            for d in _DATASETS_DIR.iterdir():
+                if d.is_dir():
+                    self._class_counts[d.name] = sum(
+                        1 for p in d.iterdir() if p.suffix.lower() in _EXTS)
 
-    def _save_example(self, crop, label: str) -> Path:
-        d = _DATASETS_DIR / _slug(label)
+    def _save_example(self, crop, label: str):
+        key = _slug(label)
+        d = _DATASETS_DIR / key
         d.mkdir(parents=True, exist_ok=True)
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         path = d / f"{ts}.jpg"
         cv2.imwrite(str(path), crop)
+        self._class_counts[key] = self._class_counts.get(key, 0) + 1
         return path
 
-    # --- mouse callback for manual box drawing ---
+    def _try_harvest(self, name: str, crop) -> None:
+        key = _slug(name)
+        if self._class_counts.get(key, 0) >= _HARVEST_CAP:
+            return
+        e = self.embedder.embed(crop)
+        seen = self._harvest_emb.setdefault(key, [])
+        if seen and max(float(np.dot(e, s)) for s in seen) >= _DEDUP_SIM:
+            return  # zu ähnlich zu bereits Geerntetem
+        self._save_example(crop, name)
+        seen.append(e)
+        self._harvested += 1
+        print(f"[ARGOS] auto-harvest: {name} -> {self._class_counts.get(key, 0)} Beispiele")
+
     def _on_mouse(self, event, x, y, flags, param) -> None:
         if not self.draw_mode:
             return
@@ -81,31 +111,37 @@ class ArgosApp:
         disp = frame
         boxes = []
         result = self.det.detect(clean)
+        now = time.time()
+        do_harvest = self.harvest and (now - self._last_harvest) >= _HARVEST_INTERVAL
         if result.boxes is not None and len(result.boxes) > 0:
             xyxy = result.boxes.xyxy.cpu().numpy().astype(int)
             cls = result.boxes.cls.cpu().numpy().astype(int)
-            for b, c in zip(xyxy, cls):
+            confs = result.boxes.conf.cpu().numpy()
+            for b, c, cf in zip(xyxy, cls, confs):
                 name = result.names.get(int(c), str(c))
                 x1, y1, x2, y2 = b
                 if name == "person":
                     cv2.rectangle(disp, (x1, y1), (x2, y2), (0, 200, 0), 1)
                     continue
+                crop = clean[max(0, y1):y2, max(0, x1):x2]
+                if do_harvest and crop.size and float(cf) >= _HARVEST_CONF:
+                    self._try_harvest(name, crop)
                 idx = len(boxes)
                 if idx >= 10:
                     cv2.rectangle(disp, (x1, y1), (x2, y2), (0, 200, 0), 1)
                     continue
                 text, color = f"[{idx}] {name}", (0, 200, 0)
-                if self.store.labels:
-                    crop = clean[max(0, y1):y2, max(0, x1):x2]
-                    if crop.size:
-                        m = self.store.match(self.embedder.embed(crop), name,
-                                             config.RECOGNITION_THRESHOLD)
-                        if m:
-                            text = f"[{idx}] {name} | {m[0]} ({m[1]:.2f})"
-                            color = (0, 165, 255)
+                if self.store.labels and crop.size:
+                    m = self.store.match(self.embedder.embed(crop), name,
+                                         config.RECOGNITION_THRESHOLD)
+                    if m:
+                        text = f"[{idx}] {name} | {m[0]} ({m[1]:.2f})"
+                        color = (0, 165, 255)
                 boxes.append((b, name))
                 cv2.rectangle(disp, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(disp, text, (x1, max(20, y1 - 8)), _FONT, 0.6, color, 2, cv2.LINE_AA)
+        if do_harvest:
+            self._last_harvest = now
 
         for face in self.faces.detect(clean):
             x, y, w, h = face[:4].astype(int)
@@ -123,10 +159,11 @@ class ArgosApp:
 
     def _overlay(self):
         shown = self._snap_disp.copy()
-        cv2.putText(shown,
-                    f"ARGOS {self.fps:4.1f}FPS  taught={len(self.store.labels)} "
-                    f"collected={self.collected} conf={self.det.conf:.2f}",
-                    (10, 28), _FONT, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
+        status = (f"ARGOS {self.fps:4.1f}FPS  taught={len(self.store.labels)} "
+                  f"collected={self.collected + self._harvested} conf={self.det.conf:.2f}")
+        if self.harvest:
+            status += f"  HARVEST(+{self._harvested})"
+        cv2.putText(shown, status, (10, 28), _FONT, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
         if self.draw_mode:
             if self._draw_start and self._draw_end:
                 cv2.rectangle(shown, self._draw_start, self._draw_end, (255, 255, 255), 2)
@@ -179,7 +216,6 @@ class ArgosApp:
         print(f"[ARGOS] gezeichnet & gespeichert: {label} -> {p.parent.name}/ ({self.collected} gesamt)")
 
     def _handle_key(self, key: int) -> bool:
-        """Return False to quit."""
         if key in (ord("q"), 27):
             return False
         if key == ord("d"):
@@ -191,9 +227,12 @@ class ArgosApp:
                   if self.draw_mode else "[ARGOS] Zeichenmodus AUS")
             return True
         if self.draw_mode:
-            return True  # im Zeichenmodus: nur Maus + d/q
+            return True
         if key == 32:
             self.frozen = not self.frozen
+        elif key == ord("h"):
+            self.harvest = not self.harvest
+            print("[ARGOS] Auto-Harvest AN" if self.harvest else "[ARGOS] Auto-Harvest AUS")
         elif key == ord("u"):
             removed = self.store.undo()
             print(f"[ARGOS] undo: {removed!r}" if removed else "[ARGOS] nichts da")
@@ -215,7 +254,7 @@ class ArgosApp:
     def run(self) -> None:
         print(f"[ARGOS] bereit — {len(self.store.labels)} Few-Shot-Beispiele, "
               f"{len(set(self.faces.names))} Gesichter, {self.collected} gesammelte Bilder.")
-        print("[ARGOS] Leertaste=einfrieren, 0-9=Objekt, d=Box zeichnen, "
+        print("[ARGOS] Leertaste=einfrieren, 0-9=Objekt, d=zeichnen, h=Auto-Harvest, "
               "-/+ = Empfindlichkeit, u=undo, q/ESC=beenden.")
         window = "ARGOS"
         cv2.namedWindow(window)
@@ -238,3 +277,4 @@ class ArgosApp:
             pass
         finally:
             cv2.destroyAllWindows()
+        
